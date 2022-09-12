@@ -23,6 +23,7 @@ minikube addons enable ingress
 
 5) Create postgres
    kubectl apply -f kubernetes/database/mysql-config.yaml
+   kubectl apply -f kubernetes/database/postgres-config.yaml
 
 6) Create prometheus/grafana
    kubectl apply -f kubernetes/observability/prometheus-config.yaml
