@@ -1,0 +1,252 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: prometheus
+  namespace: scdf-dev
+  labels:
+    app: prometheus
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - nodes/proxy
+      - services
+      - endpoints
+      - pods
+    verbs: ["get", "list", "watch"]
+  - apiGroups:
+      - extensions
+    resources:
+      - ingresses
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus
+  namespace: scdf-dev
+  labels:
+    app: prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: prometheus
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: scdf-dev
+
+---
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+  namespace: scdf-dev
+  labels:
+    app: prometheus
+
+---
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: prometheus-proxy
+  namespace: scdf-dev
+  labels:
+    app: prometheus-proxy
+subjects:
+  - kind: ServiceAccount
+    name: prometheus-proxy
+    namespace: scdf-dev
+roleRef:
+  kind: ClusterRole
+  name: cluster-admin
+  apiGroup: rbac.authorization.k8s.io
+
+---
+
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus-proxy
+  namespace: scdf-dev
+  labels:
+    app: prometheus-proxy
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-proxy
+  namespace: scdf-dev
+  labels:
+    app: prometheus-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus-proxy
+  template:
+    metadata:
+      labels:
+        app: prometheus-proxy
+    spec:
+      serviceAccountName: prometheus-proxy
+      containers:
+        - name: prometheus-proxy
+          image: micrometermetrics/prometheus-rsocket-proxy:latest
+          imagePullPolicy: Always
+          ports:
+            - name: scrape
+              containerPort: 8080
+            - name: rsocket
+              containerPort: 7001
+          resources:
+            limits:
+              cpu: 1.0
+              memory: 2048Mi
+            requests:
+              cpu: 0.5
+              memory: 1024Mi
+      securityContext:
+        fsGroup: 2000
+        runAsNonRoot: true
+        runAsUser: 1000
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-proxy
+  namespace: scdf-dev
+  labels:
+    app: prometheus-proxy
+spec:
+  selector:
+    app: prometheus-proxy
+  ports:
+    - name: scrape
+      port: 8080
+      targetPort: 8080
+    - name: rsocket
+      port: 7001
+      targetPort: 7001
+  type: LoadBalancer
+
+---
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus
+  namespace: scdf-dev
+  labels:
+    app: prometheus
+data:
+  prometheus.yml: |-
+    global:
+      scrape_interval: 10s
+      scrape_timeout: 9s
+      evaluation_interval: 10s
+    scrape_configs:
+    - job_name: 'proxied-applications'
+      metrics_path: '/metrics/connected'
+      kubernetes_sd_configs:
+        - role: pod
+          namespaces:
+            names:
+              - scdf-dev
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_label_app]
+          action: keep
+          regex: prometheus-proxy
+        - source_labels: [__meta_kubernetes_pod_container_port_number]
+          action: keep
+          regex: 8080
+    - job_name: 'proxies'
+      metrics_path: '/metrics/proxy'
+      kubernetes_sd_configs:
+        - role: pod
+          namespaces:
+            names:
+              - scdf-dev
+      relabel_configs:
+        - source_labels: [__meta_kubernetes_pod_label_app]
+          action: keep
+          regex: prometheus-proxy
+        - source_labels: [__meta_kubernetes_pod_container_port_number]
+          action: keep
+          regex: 8080
+        - action: labelmap
+          regex: __meta_kubernetes_pod_label_(.+)
+        - source_labels: [__meta_kubernetes_pod_name]
+          action: replace
+          target_label: kubernetes_pod_name
+
+---
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: scdf-dev
+  labels:
+    app: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.12.0
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus/"
+            - "--web.enable-lifecycle"
+          ports:
+            - name: prometheus
+              containerPort: 9090
+          volumeMounts:
+            - name: prometheus-config-volume
+              mountPath: /etc/prometheus/
+            - name: prometheus-storage-volume
+              mountPath: /prometheus/
+      volumes:
+        - name: prometheus-config-volume
+          configMap:
+            name: prometheus
+        - name: prometheus-storage-volume
+          emptyDir: {}
+
+---
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: scdf-dev
+  labels:
+    app: prometheus
+  annotations:
+    prometheus.io/scrape: 'true'
+    prometheus.io/path:   /
+    prometheus.io/port:   '9090'
+spec:
+  selector:
+    app: prometheus
+  ports:
+    - port: 9090
+      targetPort: 9090
