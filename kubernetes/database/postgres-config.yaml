@@ -6,8 +6,8 @@ metadata:
   labels:
     app: postgres
 data:
-  POSTGRES_DB: batch-db
-  POSTGRES_USER: batch-admin
+  POSTGRES_DB: scdf_db
+  POSTGRES_USER: scdf_admin
   POSTGRES_PASSWORD: B2U1vS8ry^h8wNb@M@NB
 
 ---
@@ -76,9 +76,9 @@ spec:
                 name: postgres-config
           volumeMounts:
             - mountPath: /var/lib/postgresql/data
-              name: batch-db
+              name: scdf-db-volume
       volumes:
-        - name: batch-db
+        - name: scdf-db-volume
           persistentVolumeClaim:
             claimName: postgres-pv-claim
 
